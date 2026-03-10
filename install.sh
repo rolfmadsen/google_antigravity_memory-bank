@@ -5,7 +5,7 @@
 #   cd /path/to/your/project
 #   curl -sO https://raw.githubusercontent.com/rolfmadsen/google_antigravity_memory-bank/main/install.sh
 #   chmod +x install.sh
-#   ./install.sh
+#   ./install.sh [branch_or_tag]
 
 set -e
 
@@ -16,7 +16,8 @@ mkdir -p .agent/memory-bank
 mkdir -p .agent/skills/memory-manager
 mkdir -p .agent/workflows
 
-REPO_URL="https://raw.githubusercontent.com/rolfmadsen/google_antigravity_memory-bank/main"
+BRANCH_OR_TAG="${1:-main}"
+REPO_URL="https://raw.githubusercontent.com/rolfmadsen/google_antigravity_memory-bank/$BRANCH_OR_TAG"
 
 echo "📋 Downloading Memory Manager skill, bridge, and tests..."
 curl -s "$REPO_URL/skills/memory-manager/SKILL.md" -o .agent/skills/memory-manager/SKILL.md

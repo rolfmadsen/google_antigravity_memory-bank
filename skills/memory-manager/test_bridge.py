@@ -24,11 +24,15 @@ def test_save_and_query_memory(temp_memory_dir, capsys):
     
     save_memory(test_text, test_meta)
     
+    # Decoupled export, so parquet won't exist yet. We can manually export it.
+    from bridge import export_to_parquet
+    export_to_parquet()
+    
     # Check if parquet file was created
     assert os.path.exists(EXPORT_PATH)
     
-    # Test querying
-    query_memory("test conclusion")
+    # Test querying with json format explicitly
+    query_memory("test conclusion", format_type="json")
     captured = capsys.readouterr()
     
     # The output should be a JSON string representing the search results

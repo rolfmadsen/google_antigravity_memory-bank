@@ -13,18 +13,21 @@ When you finish a task, you simply type `/sync`. The agent will summarize its le
 ## Features
 - **Local-First & Private:** Embedded LanceDB inside your `.agent` folder. No third-party API keys or external SaaS dependencies required.
 - **True Autonomy:** Integrates with VS Code/Editor Terminal Allow Lists to execute Python saves seamlessly without triggering security prompts.
-- **Git Friendly:** Automatically backs up memories to `conclusions_backup.parquet`, ensuring your team can share the agent's knowledge through standard pull requests.
+- **Git Friendly:** Manually back up memories to `conclusions_backup.parquet` with the `export` command, ensuring your team can share the agent's knowledge through standard pull requests.
+- **High Performance FTS:** Leverages LanceDB native full-text search capability (`tantivy` powered) instead of slow Pandas dataframe lookups.
+- **Full CRUD Support:** Provides robust `save`, `query`, `update`, and `delete` commands so the agent can continually groom and refine its knowledge.
+- **Beautiful Formatting:** Memory query results are printed in easy-to-read Markdown, keeping the AI's terminal context windows organized and parsable.
 - **Proven Test Suite:** Includes a full `pytest` suite simulating the agent executing isolated test banks to guarantee stability.
 
 ## Quickstart
 
 ### 1. Installation
-Drop the script into your target project and run it to scaffold the agent skills.
+Drop the script into your target project and run it to scaffold the agent skills. You can optionally specify a branch or tag name (defaults to `main`).
 ```bash
 cd /path/to/your/project
 curl -sO https://raw.githubusercontent.com/rolfmadsen/google_antigravity_memory-bank/main/install.sh
 chmod +x install.sh
-./install.sh
+./install.sh v1.0.0
 ```
 
 ### 2. Allow List Configuration
@@ -42,3 +45,5 @@ uv run .agent/skills/memory-manager/bridge.py
 Simply chat with your agent! When you want it to remember something important, say:
 - *"Save this architectural decision to your memory bank"*
 - Or just type `/sync` to trigger the automatic workflow script.
+
+The agent handles saving (`save`), retrieving (`query`), editing (`update`), and purging (`delete`) its conclusions autonomously. You can also tell the agent to "Snapshot the memory bank" to generate the Parquet file via the `export` command.
