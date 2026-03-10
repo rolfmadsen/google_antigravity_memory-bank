@@ -24,6 +24,18 @@ def test_save_and_query_memory(temp_memory_dir, capsys):
     
     save_memory(test_text, test_meta)
     
+    # We need the ID for update and delete logic.
+    # We can calculate it exactly as bridge.py does
+    import hashlib
+    from datetime import datetime
+    
+    # In a real scenario we wouldn't easily know the timestamp the function used,
+    # so we'll grab the ID directly from the LanceDB table for testing updates
+    from bridge import get_or_create_table
+    table = get_or_create_table()
+    saved_record = table.to_pandas().iloc[0]
+    record_id = saved_record['id']
+    
     # Decoupled export, so parquet won't exist yet. We can manually export it.
     from bridge import export_to_parquet
     export_to_parquet()
@@ -49,8 +61,58 @@ def test_save_and_query_memory(temp_memory_dir, capsys):
     try:
         results = json.loads(json_output)
         assert len(results) == 1
+        assert results[0]['id'] == record_id
         assert results[0]['text'] == test_text
         assert results[0]['metadata'] == test_meta
+    except json.JSONDecodeError:
+        pytest.fail(f"Failed to parse JSON output: {json_output}")
+
+    # Clear captured output
+    captured = capsys.readouterr()
+
+    # Test updating
+    from bridge import update_memory, delete_memory
+    
+    updated_text = "This is an updated conclusion."
+    updated_meta = {"type": "test", "status": "updated"}
+    
+    update_memory(record_id, updated_text, updated_meta)
+    
+    query_memory("updated conclusion", format_type="json")
+    captured = capsys.readouterr()
+    
+    json_output = ""
+    for line in captured.out.strip().split('\n'):
+        if line.startswith('[') or line.startswith('{') or json_output:
+            json_output += line + "\n"
+            
+    try:
+        results = json.loads(json_output)
+        assert len(results) == 1
+        assert results[0]['id'] == record_id
+        assert results[0]['text'] == updated_text
+        assert results[0]['metadata'] == updated_meta
+    except json.JSONDecodeError:
+        pytest.fail(f"Failed to parse JSON output: {json_output}")
+        
+    # Clear captured output
+    captured = capsys.readouterr()
+        
+    # Test deleting
+    delete_memory(record_id)
+    
+    query_memory("updated conclusion", format_type="json")
+    captured = capsys.readouterr()
+    
+    # The output should be the empty array since nothing should be found
+    json_output = ""
+    for line in captured.out.strip().split('\n'):
+        if line.startswith('[') or line.startswith('{') or json_output:
+            json_output += line + "\n"
+            
+    try:
+        results = json.loads(json_output)
+        assert len(results) == 0
     except json.JSONDecodeError:
         pytest.fail(f"Failed to parse JSON output: {json_output}")
 
