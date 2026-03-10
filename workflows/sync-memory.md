@@ -17,5 +17,8 @@ uv run .agent/skills/memory-manager/bridge.py save --text "Summarized learning 1
 ```bash
 uv run .agent/skills/memory-manager/bridge.py save --text "Summarized decision 2" --metadata '{"type": "decision", "module": "relevant module", "status": "active"}'
 ```
+```bash
+uv run .agent/skills/memory-manager/bridge.py export
+```
 
 4. **Confirm**: Notify the user that the sync was successful and list the items that were committed to the Memory Bank.

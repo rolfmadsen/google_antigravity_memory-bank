@@ -108,7 +108,7 @@ def query_memory(query_text, format_type="markdown"):
     
     try:
         # Create FTS index in case there's new data. Replace=True allows recreating it.
-        table.create_fts_index("text", replace=True)
+        table.create_fts_index(["text", "metadata"], replace=True)
         results_df = table.search(query_text).limit(20).to_pandas()
     except Exception as e:
         # Fallback if FTS fails (e.g. empty table or tantivy not working)
