@@ -22,13 +22,19 @@ When you finish a task, you simply type `/sync`. The agent will summarize its le
 ## Quickstart
 
 ### 1. Installation
-Drop the script into your target project and run it to scaffold the agent skills. You can optionally specify a branch or tag name (defaults to `main`).
+Drop the script into your target project and run it to scaffold the agent skills.
 ```bash
 cd /path/to/your/project
-curl -sO https://raw.githubusercontent.com/rolfmadsen/google_antigravity_memory-bank/main/install.sh
+curl -sO https://raw.githubusercontent.com/rolfmadsen/google_antigravity_memory-bank/refs/heads/main/install.sh
 chmod +x install.sh
-./install.sh v1.0.0
+./install.sh
 ```
+
+#### Manual Installation (Alternative)
+If you cannot use `curl`, you can manually set up the memory bank:
+1. Create directories: `.agent/memory-bank`, `.agent/skills/memory-manager`, and `.agent/workflows`.
+2. Copy `SKILL.md`, `bridge.py`, and `test_bridge.py` from `skills/memory-manager/` to `.agent/skills/memory-manager/`.
+3. Copy `sync-memory.md` from `workflows/` to `.agent/workflows/`.
 
 ### 2. Allow List Configuration
 To make the agent fully autonomous, you must add the execution script to your IDE/Editor's **Terminal Command Allow List**. 

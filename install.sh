@@ -17,7 +17,7 @@ mkdir -p .agent/skills/memory-manager
 mkdir -p .agent/workflows
 
 BRANCH_OR_TAG="${1:-main}"
-REPO_URL="https://raw.githubusercontent.com/rolfmadsen/google_antigravity_memory-bank/$BRANCH_OR_TAG"
+REPO_URL="https://raw.githubusercontent.com/rolfmadsen/google_antigravity_memory-bank/refs/heads/$BRANCH_OR_TAG"
 
 echo "📋 Downloading Memory Manager skill, bridge, and tests..."
 curl -s "$REPO_URL/skills/memory-manager/SKILL.md" -o .agent/skills/memory-manager/SKILL.md
@@ -25,7 +25,7 @@ curl -s "$REPO_URL/skills/memory-manager/bridge.py" -o .agent/skills/memory-mana
 curl -s "$REPO_URL/skills/memory-manager/test_bridge.py" -o .agent/skills/memory-manager/test_bridge.py
 
 echo "📋 Downloading /sync workflow..."
-curl -s "$REPO_URL/workflows/sync-memory.md" -o .agent/workflows/sync-memory.md
+curl -s "$REPO_URL/workflows/sync.md" -o .agent/workflows/sync.md
 
 echo "🔒 Creating default .gitignore entry..."
 if [ -f .gitignore ]; then

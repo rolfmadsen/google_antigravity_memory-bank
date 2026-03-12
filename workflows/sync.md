@@ -1,4 +1,5 @@
 ---
+name: sync
 description: Sync/Archive the current chat's conclusions into the Persistent Memory Bank
 ---
 
