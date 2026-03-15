@@ -1,6 +1,6 @@
 ---
 name: Memory Manager
-description: Stores and retrieves project conclusions, architectural decisions, and learnings using LanceDB. Ensures a persistent project memory bank without lock-in.
+description: Stores and retrieves project conclusions, architectural decisions, and learnings using LanceDB. Ensures a persistent project memory bank without vendor lock-in.
 ---
 
 # Memory Manager Skill
