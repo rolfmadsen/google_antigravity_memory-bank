@@ -1,28 +1,47 @@
-# Google Antigravity Memory Bank
+# Federated AI Memory System
 
-A standalone, local-first persistent memory module for Google Antigravity agents. 
+A local-first, editor-agnostic persistent memory system for AI coding agents. Works with **any** AI tool — Google Antigravity, Zed + Ollama, Claude Desktop, Cursor, or custom scripts.
 
 ## The Problem
-By default, AI coding agents like Google Antigravity can lose context between deep work sessions or rapidly evolving project structures. They understand what they are currently looking at, but they forget the *why*—architectural decisions, hard-fought bug solutions, and established conventions.
+
+AI coding agents lose context between sessions. They understand what they're looking at *now*, but forget the *why* — architectural decisions, hard-fought bug solutions, and established conventions. And when you switch editors or AI tools, all that knowledge stays locked in one silo.
 
 ## The Solution
-This repository provides a drop-in **Memory Bank** capability for any Antigravity workspace. It leverages **LanceDB** as a fast, embedded vector database and exports all conclusions to a portable `.parquet` file for easy version control and syncing.
 
-When you finish a task, you simply type `/sync`. The agent will summarize its learnings, decisions, and outcomes, and autonomously serialize them into the database securely in the background.
+A **federated two-tier memory system** that gives every AI agent persistent, searchable, hallucination-resistant memory:
+
+- **Project Memory** (`.agent/memory-bank/`) — Project-specific decisions, versioned in git
+- **Global Brain** (`~/.agent/brain/`) — Cross-project knowledge shared across all your workspaces
+- **Guardrails** — Confidence scoring, staleness detection, and contradiction warnings
+
+```
+┌─────────────────────────────────────────────────────┐
+│           AI Agent (Any Editor, Any Model)           │
+├─────────────────────────────────────────────────────┤
+│              MCP Server  ·  CLI Bridge               │
+├─────────────────────────────────────────────────────┤
+│     Federation Router (query both, merge, rank)      │
+├──────────────────────┬──────────────────────────────┤
+│   Project Memory     │      Global Brain             │
+│   .agent/memory-bank │      ~/.agent/brain           │
+│   (git-versioned)    │      (machine-local)          │
+└──────────────────────┴──────────────────────────────┘
+```
 
 ## Features
-- **Local-First & Private:** Embedded LanceDB inside your `.agent` folder. No third-party API keys or external SaaS dependencies required.
-- **True Autonomy:** Integrates with VS Code/Editor Terminal Allow Lists to execute Python saves seamlessly without triggering security prompts.
-- **Git Friendly:** Manually back up memories to `conclusions_backup.parquet` with the `export` command, ensuring your team can share the agent's knowledge through standard pull requests.
-- **High Performance FTS:** Leverages LanceDB native full-text search capability (`tantivy` powered) instead of slow Pandas dataframe lookups.
-- **Full CRUD Support:** Provides robust `save`, `query`, `update`, and `delete` commands so the agent can continually groom and refine its knowledge.
-- **Beautiful Formatting:** Memory query results are printed in easy-to-read Markdown, keeping the AI's terminal context windows organized and parsable.
-- **Proven Test Suite:** Includes a full `pytest` suite simulating the agent executing isolated test banks to guarantee stability.
+
+- **Editor-Agnostic:** MCP server works in Zed, Antigravity, Claude Desktop, Cursor. CLI works everywhere.
+- **Two-Tier Federation:** Project-specific + cross-project memories, queried in parallel, merged intelligently.
+- **Anti-Hallucination Guardrails:** Confidence scoring (0.0–1.0), staleness detection (90-day threshold), contradiction warnings, near-duplicate detection.
+- **Local-First & Private:** Embedded LanceDB — no API keys, no cloud, no subscriptions.
+- **Git-Friendly:** Parquet export for version-controlled team sharing.
+- **Full Lifecycle:** Save → Query → Update → Verify → Promote → Deprecate → Archive.
+- **Provenance Tracking:** Every memory records who created it, when, from which conversation, and in which project.
 
 ## Quickstart
 
 ### 1. Installation
-Drop the script into your target project and run it to scaffold the agent skills.
+
 ```bash
 cd /path/to/your/project
 curl -sO https://raw.githubusercontent.com/rolfmadsen/google_antigravity_memory-bank/refs/heads/main/install.sh
@@ -30,26 +49,138 @@ chmod +x install.sh
 ./install.sh
 ```
 
-#### Manual Installation (Alternative)
-If you cannot use `curl`, you can manually set up the memory bank:
-1. Create directories: `.agent/memory-bank`, `.agent/skills/memory-manager`, and `.agent/workflows`.
-2. Copy `SKILL.md`, `bridge.py`, and `test_bridge.py` from `skills/memory-manager/` to `.agent/skills/memory-manager/`.
-3. Copy `sync-memory.md` from `workflows/` to `.agent/workflows/`.
+### 2. Editor Setup
 
-### 2. Allow List Configuration
-To make the agent fully autonomous, you must add the execution script to your IDE/Editor's **Terminal Command Allow List**. 
-The agent auto-executes commands matched by an allow list entry:
-- For Unix shells, an allow list entry matches a command if its space-separated tokens form a prefix of the command's tokens. 
-- For PowerShell, the entry tokens may match any contiguous subsequence of the command tokens.
+#### Zed + Ollama (MCP)
 
-Add the following prefix to the allow list:
-```text
+Add to Zed's `settings.json`:
+
+```json
+{
+  "context_servers": {
+    "memory-brain": {
+      "command": "/home/rolfmadsen/.local/bin/uv",
+      "args": ["run", "/path/to/project/.agent/skills/memory-manager/mcp_server.py"],
+      "env": {
+        "MEMORY_PROJECT_ROOT": "/path/to/project"
+      }
+    }
+  }
+}
+```
+
+#### Google Antigravity (MCP + CLI)
+
+Add to `~/.gemini/antigravity/mcp_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "memory-brain": {
+      "command": "uv",
+      "args": ["run", ".agent/skills/memory-manager/mcp_server.py"],
+      "env": { "MEMORY_PROJECT_ROOT": "." }
+    }
+  }
+}
+```
+
+Also add the CLI allow-list prefix for slash commands:
+
+```
 uv run .agent/skills/memory-manager/bridge.py
 ```
 
-### 3. Usage
-Simply chat with your agent! When you want it to remember something important, say:
-- *"Save this architectural decision to your memory bank"*
-- Or just type `/sync` to trigger the automatic workflow script.
+#### Claude Desktop (MCP)
 
-The agent handles saving (`save`), retrieving (`query`), editing (`update`), and purging (`delete`) its conclusions autonomously. You can also tell the agent to "Snapshot the memory bank" to generate the Parquet file via the `export` command.
+Add to `~/.config/Claude/claude_desktop_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "memory-brain": {
+      "command": "uv",
+      "args": ["run", "/path/to/project/.agent/skills/memory-manager/mcp_server.py"],
+      "env": { "MEMORY_PROJECT_ROOT": "/path/to/project" }
+    }
+  }
+}
+```
+
+#### Any Other Agent (CLI)
+
+Any agent that can execute shell commands can use the CLI directly:
+
+```bash
+uv run .agent/skills/memory-manager/bridge.py query --query "search term" --scope all
+```
+
+### 3. Usage
+
+#### Save a memory
+
+```bash
+uv run .agent/skills/memory-manager/bridge.py save \
+  --text "Always use OAuth 2.1 for auth in this project" \
+  --type decision --scope project --confidence 0.9 --tags "auth,security"
+```
+
+#### Query memories
+
+```bash
+uv run .agent/skills/memory-manager/bridge.py query --query "authentication" --scope all
+```
+
+#### Check health
+
+```bash
+uv run .agent/skills/memory-manager/bridge.py status
+```
+
+#### Promote to global brain
+
+```bash
+uv run .agent/skills/memory-manager/bridge.py promote --id <memory_id>
+```
+
+### 4. Workflows
+
+| Command | Description |
+|---|---|
+| `/sync` | Archive the current session's learnings to project memory |
+| `/promote` | Distill project learnings into the global brain |
+| `/audit` | Health check: flag stale memories, resolve contradictions |
+
+## Architecture
+
+### Files
+
+| File | Purpose |
+|---|---|
+| `memory_core.py` | Core DB operations, schema, migration |
+| `guardrails.py` | Validation, confidence gating, staleness, contradiction detection |
+| `federation.py` | Two-tier routing, merge, promote, conflict resolution |
+| `bridge.py` | CLI entry point (universal) |
+| `mcp_server.py` | MCP adapter (Zed/Antigravity/Claude Desktop) |
+
+### Memory Schema
+
+| Field | Type | Description |
+|---|---|---|
+| `id` | string | SHA-256 hash |
+| `text` | string | The memory content |
+| `memory_type` | string | decision / learning / bug / pattern / convention / warning |
+| `scope` | string | global / project / module |
+| `confidence` | float | 0.0–1.0 confidence score |
+| `status` | string | active / superseded / deprecated / archived |
+| `tags` | string | Comma-separated tags |
+| `source_type` | string | conversation / commit / manual / import |
+| `source_ref` | string | Conversation ID, commit SHA |
+| `source_project` | string | Project name |
+| `created_by` | string | Agent identity |
+| `last_verified` | string | ISO timestamp (for staleness detection) |
+| `created_at` | string | ISO timestamp |
+
+## License
+
+GNU General Public License v3.0 — see [LICENSE](LICENSE) for details.

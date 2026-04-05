@@ -8,216 +8,319 @@
 # ]
 # ///
 
+"""
+bridge.py — CLI entry point for the Federated AI Memory System.
+
+This is the universal interface: any AI agent that can execute shell commands
+can use this to interact with the memory system. The MCP server (mcp_server.py)
+provides an alternative entry point for agents that support MCP.
+
+Usage:
+    uv run bridge.py save --text "..." --type decision --scope project
+    uv run bridge.py query --query "auth pattern" --scope all
+    uv run bridge.py update --id <id> --text "..." --status active
+    uv run bridge.py delete --id <id>
+    uv run bridge.py verify --id <id>
+    uv run bridge.py promote --id <id>
+    uv run bridge.py status
+    uv run bridge.py export
+    uv run bridge.py resolve-conflict --keep <id> --supersede <id>
+"""
+
 import argparse
 import json
 import os
-import lancedb
-import pyarrow as pa
-import hashlib
-from datetime import datetime
+import sys
 
-# Setup paths
-PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../..'))
-base_dir = os.environ.get('MEMORY_BANK_DIR')
-if base_dir:
-    DB_PATH = os.path.join(base_dir, 'lancedb')
-    EXPORT_PATH = os.path.join(base_dir, 'conclusions_backup.parquet')
-else:
-    DB_PATH = os.path.join(PROJECT_ROOT, '.agent', 'memory-bank', 'lancedb')
-    EXPORT_PATH = os.path.join(PROJECT_ROOT, '.agent', 'memory-bank', 'conclusions_backup.parquet')
+# Ensure sibling modules are importable
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-# Ensure directories exist
-os.makedirs(DB_PATH, exist_ok=True)
-os.makedirs(os.path.dirname(EXPORT_PATH), exist_ok=True)
+from federation import FederationRouter
+from guardrails import ValidationError
 
-# Connection to LanceDB
-_db_connection = None
 
-def get_db():
-    global _db_connection
-    if _db_connection is None:
-        _db_connection = lancedb.connect(DB_PATH)
-    return _db_connection
+# ---------------------------------------------------------------------------
+# Output Formatters
+# ---------------------------------------------------------------------------
 
-# Define schema for the table
-schema = pa.schema([
-    ("id", pa.string()),
-    ("text", pa.string()),
-    ("metadata", pa.string()),
-    ("timestamp", pa.string())
-])
+def format_results_markdown(response: dict):
+    """Pretty-print query results as Markdown."""
+    results = response.get("results", [])
+    warnings = response.get("warnings", [])
+    sources = response.get("sources", {})
 
-TABLE_NAME = "memory_bank"
-
-def get_or_create_table():
-    db = get_db()
-    try:
-        return db.open_table(TABLE_NAME)
-    except Exception:
-        return db.create_table(TABLE_NAME, schema=schema)
-
-def export_to_parquet():
-    table = get_or_create_table()
-    df = table.to_pandas()
-    df.to_parquet(EXPORT_PATH)
-    print(f"Exported {len(df)} records to {EXPORT_PATH}")
-
-def save_memory(text, metadata_json):
-    if "type" not in metadata_json:
-        metadata_json["type"] = "learning" # default or we could error out
-        
-    table = get_or_create_table()
-    timestamp = datetime.now().isoformat()
-    record_id = hashlib.sha256((text + timestamp).encode()).hexdigest()
-    
-    data = [{
-        "id": record_id,
-        "text": text,
-        "metadata": json.dumps(metadata_json),
-        "timestamp": timestamp
-    }]
-    
-    table.add(data)
-    print(f"Saved memory: {record_id}")
-    # Decoupled export, must be manually triggered now or handled via separate command
-    
-def update_memory(record_id, text, metadata_json):
-    table = get_or_create_table()
-    timestamp = datetime.now().isoformat()
-    
-    # We delete the old one and insert the new one
-    table.delete(f"id = '{record_id}'")
-    
-    data = [{
-        "id": record_id,
-        "text": text,
-        "metadata": json.dumps(metadata_json),
-        "timestamp": timestamp
-    }]
-    
-    table.add(data)
-    print(f"Updated memory: {record_id}")
-
-def delete_memory(record_id):
-    table = get_or_create_table()
-    table.delete(f"id = '{record_id}'")
-    print(f"Deleted memory: {record_id}")
-
-def query_memory(query_text, format_type="markdown"):
-    table = get_or_create_table()
-    
-    try:
-        # Create FTS index in case there's new data. Replace=True allows recreating it.
-        table.create_fts_index(["text", "metadata"], replace=True)
-        results_df = table.search(query_text).limit(20).to_pandas()
-    except Exception as e:
-        # Fallback if FTS fails (e.g. empty table or tantivy not working)
-        df = table.to_pandas()
-        if df.empty:
-            if format_type == "json":
-                print(json.dumps([]))
-            else:
-                print("No memories found.")
-            return
-            
-        results_df = df[
-            df['text'].astype(str).str.contains(query_text, case=False, na=False) |
-            df['metadata'].astype(str).str.contains(query_text, case=False, na=False)
-        ]
-        
-    if results_df.empty:
-        if format_type == "json":
-            print(json.dumps([]))
-        else:
-            print("No memories found.")
+    if not results:
+        print("No memories found.")
         return
-        
-    output = []
-    for _, row in results_df.iterrows():
-        output.append({
-            "id": row['id'],
-            "text": row['text'],
-            "metadata": json.loads(row['metadata']),
-            "timestamp": row['timestamp']
-        })
-        
-    if format_type == "json":
-        print(json.dumps(output, indent=2))
-    else:
-        # Markdown formatting
-        print(f"### Memory Search Results for '{query_text}'\n")
-        for idx, item in enumerate(output):
-            print(f"**{idx + 1}. ID:** `{item['id']}`")
-            print(f"**Date:** {item['timestamp']}")
-            print(f"**Text:**\n{item['text']}\n")
-            print(f"**Metadata:**")
-            for k, v in item['metadata'].items():
-                print(f"- `{k}`: {v}")
-            print("\n---\n")
+
+    # Header
+    total = len(results)
+    src_parts = []
+    for tier, count in sources.items():
+        if count > 0:
+            src_parts.append(f"{count} {tier}")
+    print(f"### Memory Search Results ({total} found: {', '.join(src_parts)})\n")
+
+    # Warnings
+    if warnings:
+        for w in set(warnings):  # Deduplicate
+            print(f"> {w}\n")
+
+    # Results
+    for idx, item in enumerate(results):
+        tier = item.get("_source_tier", "?")
+        stale = " 🟡 STALE" if item.get("_stale") else ""
+        conf = item.get("confidence", 0.7)
+        conf_bar = "●" * int(conf * 5) + "○" * (5 - int(conf * 5))
+
+        print(f"**{idx + 1}. [{tier}]{stale}** `{item['id'][:16]}...`")
+        print(f"   Type: `{item.get('memory_type', '?')}` | "
+              f"Confidence: {conf_bar} ({conf:.0%}) | "
+              f"Status: `{item.get('status', '?')}`")
+        print(f"   Tags: {item.get('tags', '-') or '-'}")
+        print(f"   Created: {item.get('created_at', '?')[:19]}")
+        if item.get("source_project"):
+            print(f"   Source: {item.get('source_project', '')} ({item.get('source_type', '')})")
+        print(f"\n   {item['text']}\n")
+        print("---\n")
+
+
+def format_results_json(response: dict):
+    """Output query results as JSON."""
+    # Clean internal fields
+    results = response.get("results", [])
+    for r in results:
+        for key in list(r.keys()):
+            if key.startswith("_"):
+                del r[key]
+    print(json.dumps(response, indent=2, default=str))
+
+
+def format_status(stats: dict):
+    """Pretty-print system health status."""
+    tiers = stats.get("tiers", {})
+    total = stats.get("total_memories", 0)
+    stale = stats.get("total_stale", 0)
+    health = stats.get("overall_health_pct", 100)
+
+    print("╔══════════════════════════════════════════════════════════╗")
+    print("║                  🧠 Memory Brain Health                  ║")
+    print("╠══════════════════════════════════════════════════════════╣")
+
+    for name, tier in tiers.items():
+        t = tier.get("total", 0)
+        s = tier.get("stale", 0)
+        label = f"  {name}:".ljust(22)
+        detail = f"{t} memories ({s} stale)"
+        print(f"║{label}{detail.ljust(36)}║")
+
+    print("╠══════════════════════════════════════════════════════════╣")
+    print(f"║  Total: {total}  |  Stale: {stale}  |  Health: {health}%".ljust(59) + "║")
+    print("╚══════════════════════════════════════════════════════════╝")
+
+    # Registry info
+    registry = stats.get("registry", {})
+    projects = registry.get("projects", {})
+    if projects:
+        print(f"\n📋 Registered projects: {', '.join(projects.keys())}")
+
+
+# ---------------------------------------------------------------------------
+# CLI Entry Point
+# ---------------------------------------------------------------------------
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Federated AI Memory System — CLI Bridge",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="This CLI works with any AI agent. For MCP-compatible agents, use mcp_server.py instead.",
+    )
+    subparsers = parser.add_subparsers(dest="command", help="Command to run")
+
+    # -- save --
+    save_p = subparsers.add_parser("save", help="Save a new memory")
+    save_p.add_argument("--text", required=True, help="The memory content")
+    save_p.add_argument("--type", default="learning", dest="memory_type",
+                        help="Memory type: decision|learning|bug|pattern|convention|warning")
+    save_p.add_argument("--scope", default="project", help="Scope: global|project|module")
+    save_p.add_argument("--tags", default="", help="Comma-separated tags")
+    save_p.add_argument("--confidence", type=float, default=0.8, help="Confidence 0.0-1.0")
+    save_p.add_argument("--source-type", default="conversation", help="Source type: conversation|commit|manual")
+    save_p.add_argument("--source-ref", default="", help="Source reference (conversation ID, commit SHA)")
+    save_p.add_argument("--created-by", default="unknown", help="Agent identity")
+    save_p.add_argument("--metadata", default=None, help="Legacy JSON metadata string")
+
+    # -- query --
+    query_p = subparsers.add_parser("query", help="Search memories")
+    query_p.add_argument("--query", required=True, help="Search text")
+    query_p.add_argument("--scope", default="all", help="Scope: all|project|global")
+    query_p.add_argument("--min-confidence", type=float, default=0.0, help="Minimum confidence filter")
+    query_p.add_argument("--include-deprecated", action="store_true", help="Include deprecated/archived memories")
+    query_p.add_argument("--limit", type=int, default=10, help="Max results")
+    query_p.add_argument("--format", choices=["json", "markdown"], default="markdown", help="Output format")
+
+    # -- update --
+    update_p = subparsers.add_parser("update", help="Update a memory")
+    update_p.add_argument("--id", required=True, help="Memory ID to update")
+    update_p.add_argument("--text", default=None, help="New text")
+    update_p.add_argument("--type", default=None, dest="memory_type", help="New memory type")
+    update_p.add_argument("--confidence", type=float, default=None, help="New confidence")
+    update_p.add_argument("--status", default=None, help="New status: active|superseded|deprecated|archived")
+    update_p.add_argument("--tags", default=None, help="New tags")
+    update_p.add_argument("--metadata", default=None, help="New JSON metadata")
+
+    # -- delete --
+    delete_p = subparsers.add_parser("delete", help="Delete a memory")
+    delete_p.add_argument("--id", required=True, help="Memory ID to delete")
+
+    # -- verify --
+    verify_p = subparsers.add_parser("verify", help="Mark a memory as still-accurate")
+    verify_p.add_argument("--id", required=True, help="Memory ID to verify")
+
+    # -- promote --
+    promote_p = subparsers.add_parser("promote", help="Promote a project memory to global")
+    promote_p.add_argument("--id", required=True, help="Memory ID to promote")
+    promote_p.add_argument("--generalized-text", default=None, help="Optional generalized version of the text")
+
+    # -- resolve-conflict --
+    resolve_p = subparsers.add_parser("resolve-conflict", help="Resolve a contradiction")
+    resolve_p.add_argument("--keep", required=True, help="ID of memory to keep")
+    resolve_p.add_argument("--supersede", required=True, help="ID of memory to supersede")
+    resolve_p.add_argument("--note", default="", help="Resolution note")
+
+    # -- status --
+    subparsers.add_parser("status", help="Show memory bank health")
+
+    # -- export --
+    export_p = subparsers.add_parser("export", help="Export memory bank to Parquet")
+    export_p.add_argument("--scope", default="all", help="Scope: all|project|global")
+
+    # -- Parse --
+    args = parser.parse_args()
+
+    if not args.command:
+        parser.print_help()
+        sys.exit(1)
+
+    # Initialize router
+    router = FederationRouter()
+
+    try:
+        if args.command == "save":
+            metadata = None
+            if args.metadata:
+                try:
+                    metadata = json.loads(args.metadata)
+                except json.JSONDecodeError:
+                    print("Error: --metadata must be valid JSON.")
+                    sys.exit(1)
+
+            result = router.save(
+                text=args.text,
+                memory_type=args.memory_type,
+                scope=args.scope,
+                tags=args.tags,
+                confidence=args.confidence,
+                source_type=args.source_type,
+                source_ref=args.source_ref,
+                created_by=args.created_by,
+                metadata_json=metadata,
+            )
+
+            print(f"Saved memory: {result['id']} (stored in: {result['stored_in']})")
+            for w in result.get("warnings", []):
+                print(f"  {w}")
+
+        elif args.command == "query":
+            response = router.query(
+                query_text=args.query,
+                scope=args.scope,
+                min_confidence=args.min_confidence,
+                include_deprecated=args.include_deprecated,
+                limit=args.limit,
+            )
+            if args.format == "json":
+                format_results_json(response)
+            else:
+                format_results_markdown(response)
+
+        elif args.command == "update":
+            metadata = None
+            if args.metadata:
+                try:
+                    metadata = json.loads(args.metadata)
+                except json.JSONDecodeError:
+                    print("Error: --metadata must be valid JSON.")
+                    sys.exit(1)
+
+            result = router.update(
+                record_id=args.id,
+                text=args.text,
+                memory_type=args.memory_type,
+                confidence=args.confidence,
+                status=args.status,
+                tags=args.tags,
+                metadata_json=metadata,
+            )
+
+            if result.get("updated"):
+                print(f"Updated memory: {args.id} (in: {result['store']})")
+            else:
+                print(f"Error: {result.get('error', 'Unknown error')}")
+                sys.exit(1)
+
+        elif args.command == "delete":
+            result = router.delete(args.id)
+            if result.get("deleted"):
+                print(f"Deleted memory: {args.id} (from: {result['store']})")
+            else:
+                print(f"Error: {result.get('error', 'Unknown error')}")
+                sys.exit(1)
+
+        elif args.command == "verify":
+            result = router.verify(args.id)
+            if result.get("verified"):
+                print(f"Verified memory: {args.id} (in: {result['store']})")
+            else:
+                print(f"Error: {result.get('error', 'Unknown error')}")
+                sys.exit(1)
+
+        elif args.command == "promote":
+            result = router.promote(args.id, generalized_text=args.generalized_text)
+            if result.get("promoted"):
+                print(f"Promoted: {result['source_id'][:16]}... → global:{result['global_id'][:16]}...")
+            else:
+                print(f"Error: {result.get('error', 'Unknown error')}")
+                sys.exit(1)
+
+        elif args.command == "resolve-conflict":
+            result = router.resolve_conflict(
+                keep_id=args.keep,
+                supersede_id=args.supersede,
+                resolution_note=args.note,
+            )
+            if result.get("resolved"):
+                print(f"Resolved: kept {args.keep[:16]}..., superseded {args.supersede[:16]}...")
+            else:
+                print(f"Error: {result.get('error', 'Unknown error')}")
+                sys.exit(1)
+
+        elif args.command == "status":
+            stats = router.status()
+            format_status(stats)
+
+        elif args.command == "export":
+            result = router.export(scope=args.scope)
+            for tier, info in result.items():
+                print(f"Exported {info['records']} records to {info['path']}")
+
+    except ValidationError as e:
+        print(f"Validation error: {e}")
+        sys.exit(1)
+    except Exception as e:
+        print(f"Error: {e}")
+        sys.exit(1)
+
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Memory Manager for Project Memory Bank")
-    subparsers = parser.add_subparsers(dest="command", help="Command to run")
-    
-    # Save command
-    save_parser = subparsers.add_parser("save", help="Save a new memory")
-    save_parser.add_argument("--text", required=True, help="Text conclusion or learning")
-    save_parser.add_argument("--metadata", required=True, help="JSON string of metadata")
-    
-    # Update command
-    update_parser = subparsers.add_parser("update", help="Update an existing memory")
-    update_parser.add_argument("--id", required=True, help="ID of the memory to update")
-    update_parser.add_argument("--text", required=True, help="Updated text")
-    update_parser.add_argument("--metadata", required=True, help="Updated JSON string of metadata")
-    
-    # Delete command
-    delete_parser = subparsers.add_parser("delete", help="Delete an existing memory")
-    delete_parser.add_argument("--id", required=True, help="ID of the memory to delete")
-    
-    # Query command
-    query_parser = subparsers.add_parser("query", help="Query memories")
-    query_parser.add_argument("--query", required=True, help="Text to search for")
-    query_parser.add_argument("--format", choices=["json", "markdown"], default="markdown", help="Output format")
-    
-    # Export command
-    export_parser = subparsers.add_parser("export", help="Export memory bank to parquet")
-    
-    args = parser.parse_args()
-    
-    if args.command == "save":
-        try:
-            metadata = json.loads(args.metadata)
-        except json.JSONDecodeError:
-            print("Error: metadata must be a valid JSON string.")
-            exit(1)
-            
-        if "type" not in metadata:
-            print("Error: metadata must contain a 'type' key.")
-            exit(1)
-            
-        save_memory(args.text, metadata)
-        
-    elif args.command == "update":
-        try:
-            metadata = json.loads(args.metadata)
-        except json.JSONDecodeError:
-            print("Error: metadata must be a valid JSON string.")
-            exit(1)
-            
-        if "type" not in metadata:
-            print("Error: metadata must contain a 'type' key.")
-            exit(1)
-            
-        update_memory(args.id, args.text, metadata)
-        
-    elif args.command == "delete":
-        delete_memory(args.id)
-        
-    elif args.command == "query":
-        query_memory(args.query, args.format)
-        
-    elif args.command == "export":
-        export_to_parquet()
-        
-    else:
-        parser.print_help()
+    main()
